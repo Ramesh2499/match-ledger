@@ -124,10 +124,36 @@ tr.clickable:hover td{background:var(--panel2);}
 .chip-dot{width:8px;height:8px;border-radius:2px;display:inline-block;}
 
 .svg-chart{width:100%;height:auto;}
+/* ===== Auth screen ===== */
+#auth-root{
+  position:fixed; inset:0; background:var(--bg); z-index:9999;
+  display:flex; align-items:center; justify-content:center; padding:20px;
+}
+.auth-card{
+  width:100%; max-width:380px; background:var(--panel); border:1px solid var(--line);
+  border-radius:8px; padding:32px 28px;
+}
+.auth-title{ font-family:var(--df); font-size:26px; color:var(--accent); letter-spacing:0.5px; margin-bottom:4px; }
+.auth-sub{ font-family:var(--bf); font-size:14px; color:var(--ink-dim); margin-bottom:22px; }
+.auth-field{ margin-bottom:14px; }
+.auth-field label{ display:block; font-family:var(--mf); font-size:11px; color:var(--ink-faint); letter-spacing:0.05em; margin-bottom:5px; }
+.auth-field input{
+  width:100%; background:var(--panel2); border:1px solid var(--line); color:var(--ink);
+  font-family:var(--bf); font-size:15px; padding:9px 11px; border-radius:4px;
+}
+.auth-field input:focus{ outline:2px solid var(--accent); outline-offset:1px; }
+.auth-error{ color:var(--red); font-family:var(--bf); font-size:13px; margin-bottom:12px; }
+.auth-toggle{ margin-top:18px; text-align:center; font-family:var(--bf); font-size:13px; color:var(--ink-dim); }
+.auth-toggle a{ color:var(--accent); cursor:pointer; text-decoration:underline; }
+.account-box{ font-family:var(--bf); font-size:13px; color:var(--ink-dim); padding:10px 0; border-top:1px solid var(--line); margin-top:10px; }
+.account-box .email{ color:var(--ink); font-size:12px; word-break:break-all; margin-bottom:6px; }
+.account-box button{ background:none; border:1px solid var(--line); color:var(--ink-dim); font-family:var(--bf); font-size:12px; padding:5px 10px; border-radius:4px; cursor:pointer; }
+.account-box button:hover{ border-color:var(--accent); color:var(--accent); }
 </style>
 </head>
 <body>
-<div class="shell">
+<div id="auth-root"></div>
+<div class="shell" id="app-shell" style="display:none;">
   <aside class="sidebar">
     <div class="brand">
       <div class="brand-title">MATCH LEDGER</div>
@@ -135,12 +161,14 @@ tr.clickable:hover td{background:var(--panel2);}
     </div>
     <div id="nav"></div>
     <div class="side-note">All data stored locally in your browser session. No results are simulated — every figure traces back to an imported CSV row.</div>
+    <div class="account-box" id="account-box"></div>
   </aside>
   <main class="main" id="main"></main>
 </div>
 <div id="toast-root"></div>
 <div id="modal-root"></div>
 
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"></script>
 <script>
 /* ============================================================================
@@ -7681,7 +7709,117 @@ const App = {
   },
 };
 
-App.init();
+// ===== Auth (Supabase) =====
+// Simple email/password gate in front of the app. Data itself still lives only in the
+// browser (localStorage) for now — this just controls who can open the app at all.
+const SUPABASE_URL = "https://nzuiwcxvocgakytehlel.supabase.co";
+const SUPABASE_ANON_KEY = "sb_publishable_QBagEKsbCL6LNr06ROf5XQ_ZrZ07u5K";
+const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+
+const Auth = {
+  mode: "signin",
+  error: "",
+  loading: false,
+  emailVal: "",
+
+  async init(){
+    const { data: { session } } = await sb.auth.getSession();
+    if(session){ this.showApp(session.user); } else { this.showAuthScreen(); }
+    sb.auth.onAuthStateChange((event, session)=>{
+      if(event === "SIGNED_IN" && session){ this.showApp(session.user); }
+      else if(event === "SIGNED_OUT"){ this.showAuthScreen(); }
+    });
+  },
+
+  showAuthScreen(){
+    document.getElementById("app-shell").style.display = "none";
+    document.getElementById("auth-root").style.display = "flex";
+    this.render();
+  },
+
+  showApp(user){
+    document.getElementById("auth-root").style.display = "none";
+    document.getElementById("app-shell").style.display = "flex";
+    document.getElementById("account-box").innerHTML = `
+      <div class="email">${esc(user.email)}</div>
+      <button onclick="Auth.signOut()">Log out</button>
+    `;
+    if(!window.__appBooted){ window.__appBooted = true; App.init(); }
+  },
+
+  render(){
+    const isSignUp = this.mode === "signup";
+    document.getElementById("auth-root").innerHTML = `
+      <div class="auth-card">
+        <div class="auth-title">Match <span style="font-style:italic;font-weight:400;">Ledger</span></div>
+        <div class="auth-sub">${isSignUp ? "Create your account" : "Log in to your research lab"}</div>
+        ${this.error ? `<div class="auth-error">${esc(this.error)}</div>` : ""}
+        <div class="auth-field">
+          <label>Email</label>
+          <input type="email" id="auth-email" autocomplete="email" value="${esc(this.emailVal||"")}">
+        </div>
+        <div class="auth-field">
+          <label>Password</label>
+          <input type="password" id="auth-password" autocomplete="${isSignUp?'new-password':'current-password'}">
+        </div>
+        <button class="btn btn-accent" style="width:100%;justify-content:center;" onclick="Auth.submit()" ${this.loading?"disabled":""}>${this.loading ? "Please wait..." : (isSignUp ? "Sign up" : "Log in")}</button>
+        <div class="auth-toggle">
+          ${isSignUp
+            ? `Already have an account? <a onclick="Auth.switchMode('signin')">Log in</a>`
+            : `New here? <a onclick="Auth.switchMode('signup')">Create an account</a>`}
+        </div>
+      </div>
+    `;
+    const emailInput = document.getElementById("auth-email");
+    if(emailInput){
+      emailInput.addEventListener("keydown", (e)=>{ if(e.key==="Enter") document.getElementById("auth-password").focus(); });
+      const pwInput = document.getElementById("auth-password");
+      if(pwInput) pwInput.addEventListener("keydown", (e)=>{ if(e.key==="Enter") this.submit(); });
+    }
+  },
+
+  switchMode(m){ this.mode = m; this.error=""; this.render(); },
+
+  async submit(){
+    const email = document.getElementById("auth-email").value.trim();
+    const password = document.getElementById("auth-password").value;
+    this.emailVal = email;
+    if(!email || !password){ this.error = "Please fill in both fields."; this.render(); return; }
+    if(password.length < 6){ this.error = "Password must be at least 6 characters."; this.render(); return; }
+    this.loading = true; this.error=""; this.render();
+    try{
+      if(this.mode === "signup"){
+        const { data, error } = await sb.auth.signUp({ email, password });
+        if(error) throw error;
+        if(data.user && !data.session){
+          this.loading = false; this.error = "";
+          document.getElementById("auth-root").innerHTML = `
+            <div class="auth-card">
+              <div class="auth-title">Check your email</div>
+              <div class="auth-sub">We've sent a confirmation link to ${esc(email)}. Click it, then come back and log in.</div>
+              <button class="btn" style="width:100%;justify-content:center;margin-top:10px;" onclick="Auth.switchMode('signin')">Back to log in</button>
+            </div>`;
+          return;
+        }
+      } else {
+        const { data, error } = await sb.auth.signInWithPassword({ email, password });
+        if(error) throw error;
+      }
+    }catch(e){
+      this.loading = false;
+      this.error = e.message || "Something went wrong.";
+      this.render();
+    }
+  },
+
+  async signOut(){
+    await sb.auth.signOut();
+    window.__appBooted = false;
+    location.reload();
+  },
+};
+
+Auth.init();
 </script>
 </body>
 </html>
