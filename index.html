@@ -7712,6 +7712,7 @@ const App = {
 // ===== Auth (Supabase) =====
 // Simple email/password gate in front of the app. Data itself still lives only in the
 // browser (localStorage) for now — this just controls who can open the app at all.
+const SITE_URL = "https://soccer-optimization.zerorisk1966.workers.dev";
 const SUPABASE_URL = "https://nzuiwcxvocgakytehlel.supabase.co";
 const SUPABASE_ANON_KEY = "sb_publishable_QBagEKsbCL6LNr06ROf5XQ_ZrZ07u5K";
 const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
@@ -7726,7 +7727,10 @@ const Auth = {
     const { data: { session } } = await sb.auth.getSession();
     if(session){ this.showApp(session.user); } else { this.showAuthScreen(); }
     sb.auth.onAuthStateChange((event, session)=>{
-      if(event === "SIGNED_IN" && session){ this.showApp(session.user); }
+      if(event === "PASSWORD_RECOVERY"){
+        this.mode = "reset"; this.error = ""; this.showAuthScreen();
+      }
+      else if(event === "SIGNED_IN" && session){ this.showApp(session.user); }
       else if(event === "SIGNED_OUT"){ this.showAuthScreen(); }
     });
   },
@@ -7748,6 +7752,8 @@ const Auth = {
   },
 
   render(){
+    if(this.mode === "forgot"){ this.renderForgot(); return; }
+    if(this.mode === "reset"){ this.renderReset(); return; }
     const isSignUp = this.mode === "signup";
     document.getElementById("auth-root").innerHTML = `
       <div class="auth-card">
@@ -7760,8 +7766,17 @@ const Auth = {
         </div>
         <div class="auth-field">
           <label>Password</label>
-          <input type="password" id="auth-password" autocomplete="${isSignUp?'new-password':'current-password'}">
+          <div style="position:relative;">
+            <input type="password" id="auth-password" autocomplete="${isSignUp?'new-password':'current-password'}" style="width:100%;padding-right:40px;box-sizing:border-box;">
+            <button type="button" onclick="Auth.togglePasswordVisibility()" aria-label="Show password" style="position:absolute;right:8px;top:50%;transform:translateY(-50%);background:none;border:none;cursor:pointer;padding:4px;display:flex;align-items:center;color:#9ca3af;">
+              <svg id="auth-eye-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path>
+                <circle cx="12" cy="12" r="3"></circle>
+              </svg>
+            </button>
+          </div>
         </div>
+        ${!isSignUp ? `<div style="text-align:right;margin:-6px 0 12px;"><a onclick="Auth.switchMode('forgot')" style="font-size:13px;cursor:pointer;color:#9ca3af;">Forgot password?</a></div>` : ""}
         <button class="btn btn-accent" style="width:100%;justify-content:center;" onclick="Auth.submit()" ${this.loading?"disabled":""}>${this.loading ? "Please wait..." : (isSignUp ? "Sign up" : "Log in")}</button>
         <div class="auth-toggle">
           ${isSignUp
@@ -7779,6 +7794,101 @@ const Auth = {
   },
 
   switchMode(m){ this.mode = m; this.error=""; this.render(); },
+
+  renderForgot(){
+    document.getElementById("auth-root").innerHTML = `
+      <div class="auth-card">
+        <div class="auth-title">Reset your password</div>
+        <div class="auth-sub">Enter your email and we'll send you a link to set a new password.</div>
+        ${this.error ? `<div class="auth-error">${esc(this.error)}</div>` : ""}
+        <div class="auth-field">
+          <label>Email</label>
+          <input type="email" id="auth-email" autocomplete="email" value="${esc(this.emailVal||"")}">
+        </div>
+        <button class="btn btn-accent" style="width:100%;justify-content:center;" onclick="Auth.sendResetLink()" ${this.loading?"disabled":""}>${this.loading ? "Sending..." : "Send reset link"}</button>
+        <div class="auth-toggle">Remembered it? <a onclick="Auth.switchMode('signin')">Back to log in</a></div>
+      </div>
+    `;
+    const emailInput = document.getElementById("auth-email");
+    if(emailInput) emailInput.addEventListener("keydown", (e)=>{ if(e.key==="Enter") this.sendResetLink(); });
+  },
+
+  async sendResetLink(){
+    const email = document.getElementById("auth-email").value.trim();
+    this.emailVal = email;
+    if(!email){ this.error = "Please enter your email."; this.render(); return; }
+    this.loading = true; this.error = ""; this.render();
+    try{
+      const { error } = await sb.auth.resetPasswordForEmail(email, { redirectTo: SITE_URL });
+      if(error) throw error;
+      document.getElementById("auth-root").innerHTML = `
+        <div class="auth-card">
+          <div class="auth-title">Check your email</div>
+          <div class="auth-sub">If an account exists for ${esc(email)}, we've sent a link to reset your password. Click it, then you'll be able to set a new one.</div>
+          <button class="btn" style="width:100%;justify-content:center;margin-top:10px;" onclick="Auth.switchMode('signin')">Back to log in</button>
+        </div>`;
+    }catch(e){
+      this.loading = false;
+      this.error = e.message || "Something went wrong.";
+      this.render();
+    }
+  },
+
+  renderReset(){
+    document.getElementById("auth-root").innerHTML = `
+      <div class="auth-card">
+        <div class="auth-title">Set a new password</div>
+        <div class="auth-sub">Choose a new password for your account.</div>
+        ${this.error ? `<div class="auth-error">${esc(this.error)}</div>` : ""}
+        <div class="auth-field">
+          <label>New password</label>
+          <div style="position:relative;">
+            <input type="password" id="auth-newpassword" autocomplete="new-password" style="width:100%;padding-right:40px;box-sizing:border-box;">
+            <button type="button" onclick="Auth.togglePasswordVisibility('auth-newpassword','auth-newpassword-eye')" aria-label="Show password" style="position:absolute;right:8px;top:50%;transform:translateY(-50%);background:none;border:none;cursor:pointer;padding:4px;display:flex;align-items:center;color:#9ca3af;">
+              <svg id="auth-newpassword-eye" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path>
+                <circle cx="12" cy="12" r="3"></circle>
+              </svg>
+            </button>
+          </div>
+        </div>
+        <button class="btn btn-accent" style="width:100%;justify-content:center;" onclick="Auth.submitNewPassword()" ${this.loading?"disabled":""}>${this.loading ? "Saving..." : "Save new password"}</button>
+      </div>
+    `;
+    const pwInput = document.getElementById("auth-newpassword");
+    if(pwInput) pwInput.addEventListener("keydown", (e)=>{ if(e.key==="Enter") this.submitNewPassword(); });
+  },
+
+  async submitNewPassword(){
+    const password = document.getElementById("auth-newpassword").value;
+    if(!password || password.length < 6){ this.error = "Password must be at least 6 characters."; this.render(); return; }
+    this.loading = true; this.error = ""; this.render();
+    try{
+      const { error } = await sb.auth.updateUser({ password });
+      if(error) throw error;
+      document.getElementById("auth-root").innerHTML = `
+        <div class="auth-card">
+          <div class="auth-title">Password updated</div>
+          <div class="auth-sub">Your password has been changed. You're now logged in.</div>
+          <button class="btn btn-accent" style="width:100%;justify-content:center;margin-top:10px;" onclick="Auth.init()">Continue</button>
+        </div>`;
+    }catch(e){
+      this.loading = false;
+      this.error = e.message || "Something went wrong.";
+      this.render();
+    }
+  },
+
+  togglePasswordVisibility(inputId, iconId){
+    const pwInput = document.getElementById(inputId || "auth-password");
+    const icon = document.getElementById(iconId || "auth-eye-icon");
+    if(!pwInput || !icon) return;
+    const showing = pwInput.type === "text";
+    pwInput.type = showing ? "password" : "text";
+    icon.innerHTML = showing
+      ? `<path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path><circle cx="12" cy="12" r="3"></circle>`
+      : `<path d="M17.94 17.94A10.94 10.94 0 0 1 12 20c-7 0-11-8-11-8a18.6 18.6 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"></path><line x1="1" y1="1" x2="23" y2="23"></line>`;
+  },
 
   async submit(){
     const email = document.getElementById("auth-email").value.trim();
