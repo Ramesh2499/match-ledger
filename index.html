@@ -5707,6 +5707,7 @@ const App = {
       {id:"matches", label:"Matches", icon:ICONS.search},
       {id:"research", label:"Research", icon:ICONS.flask},
       {id:"strategies", label:"Strategies", icon:ICONS.layers},
+      {id:"healthcheck", label:"Data Check", icon:"✅"},
       {id:"dutching", label:"Trading Calculators", icon:ICONS.calc},
       {id:"optimize", label:"Optimize", icon:ICONS.target},
       {id:"export", label:"Export", icon:ICONS.download},
@@ -5748,6 +5749,7 @@ const App = {
         case "matches": main.innerHTML = this.renderMatchesShell(); this.updateMatchesResults(); break;
         case "research": main.innerHTML = this.renderResearch(); break;
         case "strategies": main.innerHTML = this.renderStrategies(); break;
+        case "healthcheck": main.innerHTML = this.renderHealthCheck(); break;
         case "dutching": main.innerHTML = this.renderDutching(); break;
         case "optimize": main.innerHTML = this.renderOptimize(); break;
         case "export": main.innerHTML = this.renderExport(); break;
@@ -7116,6 +7118,106 @@ const App = {
     if(!team || team==="ALL") return matches;
     return matches.filter(m=>m.home_team===team || m.away_team===team);
   },
+  // Runs every one of the 101 strategies, once each, against whatever data is actually loaded
+  // right now — with each strategy's own default settings. This answers a different question
+  // than "which strategy wins": it answers "which strategies can even produce a real result
+  // with the data currently sitting in this account", separating strategies that genuinely
+  // work from ones that only fail because a required data column (e.g. opening/closing odds)
+  // isn't present in the imported CSVs.
+  runHealthCheck(){
+    const matches = this.allMatches();
+    const results = STRATEGIES.map(def=>{
+      let res, status, note;
+      try{
+        res = def.run(matches, JSON.parse(JSON.stringify(def.defaultParams)));
+      }catch(e){
+        return { id:def.id, name:def.name, status:"ERROR", note: (e && e.message) ? e.message : "Unknown error while running this strategy." };
+      }
+      if(!res){
+        return { id:def.id, name:def.name, status:"ERROR", note:"Strategy returned no result." };
+      }
+      const scopeCount = (typeof res.scopeCount === "number") ? res.scopeCount : (Array.isArray(res.ledger) ? res.ledger.length : 0);
+      if(scopeCount === 0){
+        return { id:def.id, name:def.name, status:"NO_MATCHES_IN_SCOPE", note:"No imported matches fall within this strategy's default league/season scope." };
+      }
+      let missingCount = (typeof res.missing === "number") ? res.missing : null;
+      if(missingCount === null && Array.isArray(res.ledger)){
+        missingCount = res.ledger.filter(r=>r.status==="MISSING_DATA" || r.qualified_status==="MISSING_DATA").length;
+      }
+      if(missingCount === null){
+        // This strategy's return shape doesn't expose a missing-data count at all — it ran
+        // without crashing, which is the most we can verify generically, so treat it as working.
+        return { id:def.id, name:def.name, status:"WORKING", note:`Ran cleanly across ${scopeCount} matches in scope.` };
+      }
+      if(missingCount >= scopeCount){
+        return { id:def.id, name:def.name, status:"MISSING_DATA", note:`All ${scopeCount} matches in scope are missing a data column this strategy needs (see its "Data requirements" note).` };
+      }
+      return { id:def.id, name:def.name, status:"WORKING", note:`${scopeCount-missingCount} of ${scopeCount} matches in scope have the data this strategy needs.` };
+    });
+    const summary = { WORKING:0, MISSING_DATA:0, NO_MATCHES_IN_SCOPE:0, ERROR:0 };
+    for(const r of results) summary[r.status] = (summary[r.status]||0) + 1;
+    this.ui.healthCheck = { results, summary, ranAt: new Date().toLocaleString(), totalMatches: matches.length };
+    this.render();
+  },
+  renderHealthCheck(){
+    const hc = this.ui.healthCheck;
+    const statusMeta = {
+      WORKING: {label:"Working now", color:"var(--accent)", desc:"Produces a real result with your current data."},
+      MISSING_DATA: {label:"Blocked — missing data", color:"var(--amber)", desc:"Ran fine, but every match in scope is missing a column this strategy needs (e.g. opening/closing odds)."},
+      NO_MATCHES_IN_SCOPE: {label:"No matches in scope", color:"var(--ink-dim)", desc:"None of your imported matches fall inside this strategy's default league/season."},
+      ERROR: {label:"Code error", color:"var(--red)", desc:"The strategy threw an error while running — a real bug, worth reporting."},
+    };
+    let body;
+    if(!hc){
+      body = `
+        <div class="card" style="padding:28px;">
+          <div style="font-size:15px;line-height:1.6;color:var(--ink-dim);margin-bottom:16px;">
+            This checks all 101 strategies against the data you've actually imported right now — each strategy
+            runs once with its own default settings. It tells you which ones can produce a real result today,
+            versus which ones are blocked because your imported data is missing a column they need (like
+            opening/closing odds), versus ones that hit a genuine code error.
+          </div>
+          <button class="btn btn-accent" onclick="App.runHealthCheck()">▶ Run Data Compatibility Check</button>
+        </div>`;
+    } else {
+      const order = ["WORKING","MISSING_DATA","NO_MATCHES_IN_SCOPE","ERROR"];
+      const summaryCards = order.map(k=>`
+        <div class="card" style="padding:16px;text-align:center;">
+          <div style="font-size:28px;font-weight:700;color:${statusMeta[k].color};">${hc.summary[k]||0}</div>
+          <div style="font-size:13px;color:var(--ink-dim);margin-top:4px;">${statusMeta[k].label}</div>
+        </div>`).join("");
+      const rows = hc.results.map(r=>`
+        <tr>
+          <td style="padding:10px 12px;border-bottom:1px solid var(--line);">${esc(r.name)}</td>
+          <td style="padding:10px 12px;border-bottom:1px solid var(--line);white-space:nowrap;">
+            <span style="color:${statusMeta[r.status].color};font-weight:600;">${statusMeta[r.status].label}</span>
+          </td>
+          <td style="padding:10px 12px;border-bottom:1px solid var(--line);color:var(--ink-dim);font-size:13px;">${esc(r.note)}</td>
+        </tr>`).join("");
+      body = `
+        <div style="margin-bottom:16px;color:var(--ink-dim);font-size:13px;">
+          Checked ${hc.results.length} strategies against ${hc.totalMatches} loaded matches · ${esc(hc.ranAt)}
+        </div>
+        <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:20px;">${summaryCards}</div>
+        <button class="btn" style="margin-bottom:16px;" onclick="App.runHealthCheck()">↻ Re-run Check</button>
+        <div class="card" style="padding:0;overflow:hidden;">
+          <table style="width:100%;border-collapse:collapse;font-size:14px;">
+            <thead><tr style="background:var(--panel2);">
+              <th style="text-align:left;padding:10px 12px;">Strategy</th>
+              <th style="text-align:left;padding:10px 12px;">Status</th>
+              <th style="text-align:left;padding:10px 12px;">Why</th>
+            </tr></thead>
+            <tbody>${rows}</tbody>
+          </table>
+        </div>`;
+    }
+    return `
+      <div>
+        <div style="font-family:var(--df);font-size:26px;font-weight:600;color:var(--accent);margin-bottom:4px;">Data Compatibility Check</div>
+        <div style="color:var(--ink-dim);margin-bottom:20px;">How many of your 101 strategies can actually run with the data you've imported right now.</div>
+        ${body}
+      </div>`;
+  },
   runStrategy(){
     const s = this.ui.strategies;
     const def = STRATEGIES.find(x=>x.id===s.activeId);
@@ -7725,12 +7827,12 @@ const Auth = {
 
   async init(){
     const { data: { session } } = await sb.auth.getSession();
-    if(session){ this.showApp(session.user); } else { this.showAuthScreen(); }
+    if(session){ this.checkAccess(session.user); } else { this.showAuthScreen(); }
     sb.auth.onAuthStateChange((event, session)=>{
       if(event === "PASSWORD_RECOVERY"){
         this.mode = "reset"; this.error = ""; this.showAuthScreen();
       }
-      else if(event === "SIGNED_IN" && session){ this.showApp(session.user); }
+      else if(event === "SIGNED_IN" && session){ this.checkAccess(session.user); }
       else if(event === "SIGNED_OUT"){ this.showAuthScreen(); }
     });
   },
@@ -7741,14 +7843,63 @@ const Auth = {
     this.render();
   },
 
-  showApp(user){
+  // Looks up (or creates) this user's row in the "subscribers" table, then decides
+  // whether to show the real app or a "please subscribe" screen.
+  async checkAccess(user){
+    try{
+      let { data: rows, error } = await sb.from("subscribers").select("*").eq("user_id", user.id).limit(1);
+      if(error) throw error;
+      let sub = rows && rows[0];
+      if(!sub){
+        // First time we've ever seen this user: start their 7-day free trial.
+        const trialEndsAt = new Date(Date.now() + 7*24*60*60*1000).toISOString();
+        const { data: inserted, error: insErr } = await sb.from("subscribers")
+          .insert({ user_id: user.id, status: "trialing", trial_ends_at: trialEndsAt })
+          .select().single();
+        if(insErr) throw insErr;
+        sub = inserted;
+      }
+      const trialActive = sub.status === "trialing" && sub.trial_ends_at && new Date(sub.trial_ends_at) > new Date();
+      const isActive = sub.status === "active";
+      if(isActive || trialActive){ this.showApp(user, sub); }
+      else { this.showSubscribeScreen(user, sub); }
+    }catch(e){
+      console.error("Subscription check failed:", e);
+      // Don't lock anyone out because of a technical hiccup while this is still being tested.
+      this.showApp(user, null);
+    }
+  },
+
+  showApp(user, sub){
     document.getElementById("auth-root").style.display = "none";
     document.getElementById("app-shell").style.display = "flex";
+    let trialLine = "";
+    if(sub && sub.status === "trialing" && sub.trial_ends_at){
+      const daysLeft = Math.max(0, Math.ceil((new Date(sub.trial_ends_at) - new Date()) / (1000*60*60*24)));
+      trialLine = `<div style="font-size:11px;color:var(--ink-faint);margin-bottom:6px;">Trial: ${daysLeft} day${daysLeft===1?"":"s"} left</div>`;
+    }
     document.getElementById("account-box").innerHTML = `
       <div class="email">${esc(user.email)}</div>
+      ${trialLine}
       <button onclick="Auth.signOut()">Log out</button>
     `;
     if(!window.__appBooted){ window.__appBooted = true; App.init(); }
+  },
+
+  showSubscribeScreen(user, sub){
+    document.getElementById("app-shell").style.display = "none";
+    document.getElementById("auth-root").style.display = "flex";
+    const endedText = sub && sub.trial_ends_at
+      ? `Your free trial ended on ${new Date(sub.trial_ends_at).toLocaleDateString()}.`
+      : `Your free trial has ended.`;
+    document.getElementById("auth-root").innerHTML = `
+      <div class="auth-card">
+        <div class="auth-title">Match <span style="font-style:italic;font-weight:400;">Ledger</span></div>
+        <div class="auth-sub">${esc(endedText)} Subscribe to keep using Match Ledger.</div>
+        <button class="btn btn-accent" style="width:100%;justify-content:center;margin-bottom:14px;" disabled>Subscribe — coming soon</button>
+        <div class="auth-toggle"><a onclick="Auth.signOut()">Log out</a></div>
+      </div>
+    `;
   },
 
   render(){
