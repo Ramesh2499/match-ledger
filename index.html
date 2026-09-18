@@ -7896,7 +7896,7 @@ const Auth = {
       <div class="auth-card">
         <div class="auth-title">Match <span style="font-style:italic;font-weight:400;">Ledger</span></div>
         <div class="auth-sub">${esc(endedText)} Subscribe to keep using Match Ledger.</div>
-        <button class="btn btn-accent" style="width:100%;justify-content:center;margin-bottom:14px;" disabled>Subscribe — coming soon</button>
+<button id="subscribe-btn" class="btn btn-accent" style="width:100%;justify-content:center;margin-bottom:14px;" onclick="(function(btn){btn.disabled=true;btn.textContent='Loading...';fetch('https://soccer-payments.zerorisk1966.workers.dev/create-checkout-session',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({userId:'${esc(user.id)}',email:'${esc(user.email)}'})}).then(function(r){return r.json();}).then(function(d){if(d.url){window.location.href=d.url;}else{alert('Something went wrong: '+(d.error||'unknown error'));btn.disabled=false;btn.textContent='Subscribe Now';}}).catch(function(e){alert('Network error, please try again.');btn.disabled=false;btn.textContent='Subscribe Now';});})(this)">Subscribe Now</button>
         <div class="auth-toggle"><a onclick="Auth.signOut()">Log out</a></div>
       </div>
     `;
